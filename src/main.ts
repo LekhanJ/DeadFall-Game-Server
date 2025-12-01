@@ -1,37 +1,65 @@
 import { WebSocketServer, WebSocket } from "ws";
+import { Player } from "./entities/player.ts";
 
 const wss = new WebSocketServer({ port: 3000 });
 
-let player = {
-  x: 300,
-  y: 300,
-  inputs: [],
-  speed: 5
-};
+const players = new Map<string, Player>();
 
 wss.on("connection", (ws: WebSocket) => {
-  console.log("Connected");
+  console.log("Client connected.");
+
+  const sessionId = crypto.randomUUID();
+  const player = new Player(sessionId, ws);
+  players.set(sessionId, player);
+
+  console.log("Player joined with id:", sessionId);
+
+  ws.send(JSON.stringify({
+    type: "connected",
+    sessionId: sessionId
+  }));
 
   ws.on("message", (msg: string) => {
     const data = JSON.parse(msg);
-    player.inputs = data.inputs;
+
+    switch (data.type) {
+      case "playerMove":
+        player.inputs = data.inputs;
+        break;
+
+      default:
+        console.warn("Unknown message type:", data.type);
+        break;
+    }
   });
 
-  const TICK_RATE = 30;
-  const interval = setInterval(() => gameTick(ws), 1000 / TICK_RATE);
-
   ws.on("close", () => {
-    clearInterval(interval);
+    console.log("Player disconnected:", sessionId);
+    players.delete(sessionId);
   });
 });
 
-function gameTick(ws: WebSocket) {
-  let dx = 0, dy = 0;
+const TICK_RATE = 60;
+setInterval(gameTick, 1000 / TICK_RATE);
 
-  if (player.inputs.includes("up")) dy -= 1;
-  if (player.inputs.includes("down")) dy += 1;
-  if (player.inputs.includes("left")) dx -= 1;
-  if (player.inputs.includes("right")) dx += 1;
+function gameTick() {
+  for (const player of players.values()) {
+    simulateMovement(player);
+  }
+
+  broadcastState();
+}
+
+function simulateMovement(player: Player) {
+  let dx = 0,
+    dy = 0;
+
+  const [up, down, left, right] = player.inputs;
+
+  if (up) dy -= 1;
+  if (down) dy += 1;
+  if (left) dx -= 1;
+  if (right) dx += 1;
 
   const len = Math.hypot(dx, dy);
   if (len > 0) {
@@ -41,6 +69,26 @@ function gameTick(ws: WebSocket) {
 
   player.x += dx * player.speed;
   player.y += dy * player.speed;
+}
 
-  ws.send(JSON.stringify({ x: player.x, y: player.y }));
+function broadcastState() {
+  const snapshot: Record<string, any> = {};
+
+  for (const [id, player] of players) {
+    snapshot[id] = {
+      x: player.x,
+      y: player.y,
+    };
+  }
+
+  const payload = JSON.stringify({
+    type: "playerMove",
+    players: snapshot,
+  });
+
+  for (const player of players.values()) {
+    if (player.ws.readyState === WebSocket.OPEN) {
+      player.ws.send(payload);
+    }
+  }
 }
