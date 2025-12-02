@@ -16,9 +16,13 @@ wss.on("connection", (ws: WebSocket) => {
 
   ws.send(JSON.stringify({
     type: "connected",
-    sessionId: sessionId
+    sessionId: sessionId,
   }));
 
+  if (players.size === 2) {
+    starGame();
+  }
+  
   ws.on("message", (msg: string) => {
     const data = JSON.parse(msg);
 
@@ -71,6 +75,29 @@ function simulateMovement(player: Player) {
   player.y += dy * player.speed;
 }
 
+function starGame() {
+  const snapshot: Record<string, any> = {};
+
+  for (const [id, player] of players) {
+    snapshot[id] = {
+      x: player.x,
+      y: player.y,
+    };
+  }
+
+  const payload = JSON.stringify({
+    type: "startGame",
+    players: snapshot,
+  });
+  
+
+  for (const player of players.values()) {
+    if (player.ws.readyState === WebSocket.OPEN) {
+      player.ws.send(payload);
+    }
+  }
+}
+
 function broadcastState() {
   const snapshot: Record<string, any> = {};
 
@@ -85,6 +112,7 @@ function broadcastState() {
     type: "playerMove",
     players: snapshot,
   });
+  
 
   for (const player of players.values()) {
     if (player.ws.readyState === WebSocket.OPEN) {
