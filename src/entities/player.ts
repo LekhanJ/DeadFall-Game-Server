@@ -1,7 +1,7 @@
-import { WebSocket } from "ws";
-
 export class Player {
   sessionId: string;
+  username: string;
+  
 
   x: number;
   y: number;
@@ -10,6 +10,7 @@ export class Player {
 
   constructor(sessionId: string) {
     this.sessionId = sessionId;
+    this.username = '';
 
     this.x = 0;
     this.y = 0;

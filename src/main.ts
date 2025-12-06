@@ -40,5 +40,12 @@ wss.on("connection", (ws: WebSocket) => {
     console.log("Player disconnected:", thisPlayerSessionId);
     players.delete(thisPlayerSessionId);
     sockets.delete(thisPlayerSessionId);
+
+    for (let socket of sockets.values()) {
+    socket.send(JSON.stringify({
+      type: "player_left",
+      sessionId: thisPlayerSessionId
+    }));
+  }
   });
 });
