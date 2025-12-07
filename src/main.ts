@@ -16,24 +16,47 @@ wss.on("connection", (ws: WebSocket) => {
 
   console.log("Player joined with id:", thisPlayerSessionId);
 
-  ws.send(JSON.stringify({
-    type: "initialState",
-    sessionId: thisPlayerSessionId,
-    self: player,
-    others: Array.from(players.values()).filter(p => p.sessionId !== thisPlayerSessionId),
-  }));
-  
+  ws.send(
+    JSON.stringify({
+      type: "initialState",
+      sessionId: thisPlayerSessionId,
+      self: player,
+      others: Array.from(players.values()).filter(
+        (p) => p.sessionId !== thisPlayerSessionId
+      ),
+    })
+  );
+
   for (let [id, socket] of sockets) {
     if (id !== thisPlayerSessionId) {
-      socket.send(JSON.stringify({
-        type: "spawn",
-        player: player,
-      }));
+      socket.send(
+        JSON.stringify({
+          type: "spawn",
+          player: player,
+        })
+      );
     }
   }
 
-  ws.on("message", (msg: string) => {
+  ws.on("message", (message: string) => {
+    const data = JSON.parse(message);
 
+    if (data.type === "updatePosition") {
+      player.position.x = data.position.x;
+      player.position.y = data.position.y;
+
+      for (let [id, socket] of sockets) {
+        if (id !== thisPlayerSessionId) {
+          socket.send(
+            JSON.stringify({
+              type: "updatePosition",
+              thisPlayerSessionId,
+              position: player.position,
+            })
+          );
+        }
+      }
+    }
   });
 
   ws.on("close", () => {
@@ -42,10 +65,12 @@ wss.on("connection", (ws: WebSocket) => {
     sockets.delete(thisPlayerSessionId);
 
     for (let socket of sockets.values()) {
-    socket.send(JSON.stringify({
-      type: "player_left",
-      sessionId: thisPlayerSessionId
-    }));
-  }
+      socket.send(
+        JSON.stringify({
+          type: "player_left",
+          sessionId: thisPlayerSessionId,
+        })
+      );
+    }
   });
 });
