@@ -1,11 +1,45 @@
 import { WebSocketServer, WebSocket } from "ws";
 import { Player } from "./entities/player.ts";
 import { Vector2 } from "./utils/vector2.ts";
+import { Bullet } from "./entities/bullet.ts";
 
 const wss = new WebSocketServer({ port: 3000 });
 
 const players = new Map<string, Player>();
 const sockets = new Map<string, WebSocket>();
+const bullets = new Map<string, Bullet>();
+
+setInterval(() => {
+  bullets.forEach((bullet) => {
+    let destroy = bullet.onUpdate(33);
+
+    if (destroy) {
+      bullets.delete(bullet.id);
+
+      sockets.forEach((socket) => {
+        socket.send(
+          JSON.stringify({
+            type: "serverUnspawn",
+            id: bullet.id,
+          })
+        );
+      });
+    } else {
+      sockets.forEach((socket) => {
+        socket.send(
+          JSON.stringify({
+            type: "bulletMove",
+            id: bullet.id,
+            position: {
+              x: bullet.position.x,
+              y: bullet.position.y,
+            },
+          })
+        );
+      });
+    }
+  });
+}, 33);
 
 wss.on("connection", (ws: WebSocket) => {
   console.log("Client connected.");
@@ -74,17 +108,29 @@ wss.on("connection", (ws: WebSocket) => {
     }
 
     if (data.type === "shoot") {
-      for (let [id, socket] of sockets) {
+      const bullet = new Bullet();
+      console.log("Bullet spawn");
+      
+      bullet.name = "Bullet";
+      bullet.position.x = data.position.x;
+      bullet.position.y = data.position.y;
+      bullet.direction.x = data.direction.x;
+      bullet.direction.y = data.direction.y;
+
+      bullets.set(bullet.id, bullet);
+
+      sockets.forEach((socket) => {
         socket.send(
           JSON.stringify({
-            type: "shoot",
-            sessionId: thisPlayerSessionId,
-            position: data.position,
-            direction: data.direction,
+            type: "serverSpawn",
+            name: bullet.name,
+            sessionId: thisPlayerSessionId, 
+            id: bullet.id, 
+            position: bullet.position,
+            direction: bullet.direction,
           })
         );
-      }
-      checkHitDetection(data, player, thisPlayerSessionId);
+      });
     }
   });
 
@@ -104,89 +150,20 @@ wss.on("connection", (ws: WebSocket) => {
   });
 });
 
-function checkHitDetection(data, player: Player, shooterId: string) {
-  const shooter = player;
-  const dir = new Vector2(data.direction.x, data.direction.y).normalize();
-  const maxRange = 10; 
-  const hitRadius = 0.5;
-  let closestTarget: Player | null = null;
-  let closestDist = maxRange;
-
-  for (let [id, other] of players) {
-    if (id === shooterId) continue;
-    if (!other.isAlive) continue;
-
-    const hitInfo = rayHitPlayer(
-      shooter.position,
-      dir,
-      other.position,
-      hitRadius,
-      maxRange
-    );
-
-    if (hitInfo && hitInfo.distance < closestDist) {
-      closestDist = hitInfo.distance;
-      closestTarget = other;
-    }
-  }
-
-  if (closestTarget) {
-    console.log("Got Hit");
-    
-    const damage = 25;
-    closestTarget.health -= damage;
-    if (closestTarget.health <= 0) {
-      closestTarget.health = 0;
-      closestTarget.isAlive = false;
-      console.log("Player Died");
-      
-      for (let [, socket] of sockets) {
-        socket.send(
-          JSON.stringify({
-            type: "playerKilled",
-            sessionId: closestTarget.sessionId,
-          })
-        );
+function interval(func, wait, times) {
+  var interv = (function (w, t) {
+    return function () {
+      if (typeof t === "undefined" || t-- > 0) {
+        setTimeout(interv, w);
+        try {
+          func.call(null);
+        } catch (e) {
+          t = 0;
+          throw e.toString();
+        }
       }
-    }
+    };
+  })(wait, times);
 
-    for (let [, socket] of sockets) {
-      socket.send(
-        JSON.stringify({
-          type: "healthUpdate",
-          sessionId: closestTarget.sessionId,
-          health: closestTarget.health,
-          maxHealth: closestTarget.maxHealth,
-        })
-      );
-    }
-  }
-}
-
-function rayHitPlayer( origin: Vector2, dir: Vector2, target: Vector2, radius: number,maxRange: number): { distance: number } | null {
-  const toTarget = new Vector2(
-    target.x - origin.x,
-    target.y - origin.y
-  );
-
-  const proj = toTarget.x * dir.x + toTarget.y * dir.y;
-
-  if (proj < 0 || proj > maxRange) {
-    return null;
-  }
-
-  const closest = new Vector2(
-    origin.x + dir.x * proj,
-    origin.y + dir.y * proj
-  );
-
-  const dx = target.x - closest.x;
-  const dy = target.y - closest.y;
-  const distToLine = Math.sqrt(dx * dx + dy * dy);
-
-  if (distToLine <= radius) {
-    return { distance: proj };
-  }
-
-  return null;
+  setTimeout(interv, wait);
 }
