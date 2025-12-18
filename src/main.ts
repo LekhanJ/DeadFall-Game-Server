@@ -1,6 +1,5 @@
 import { WebSocketServer, WebSocket } from "ws";
 import { Player } from "./entities/player.ts";
-import { Vector2 } from "./utils/vector2.ts";
 import { Bullet } from "./entities/bullet.ts";
 
 const wss = new WebSocketServer({ port: 3000 });
@@ -9,6 +8,7 @@ const players = new Map<string, Player>();
 const sockets = new Map<string, WebSocket>();
 const bullets = new Map<string, Bullet>();
 
+// Bullet update loop
 setInterval(() => {
   bullets.forEach((bullet) => {
     let destroy = bullet.onUpdate(33);
@@ -51,6 +51,7 @@ wss.on("connection", (ws: WebSocket) => {
 
   console.log("Player joined with id:", thisPlayerSessionId);
 
+  // Send initial state
   ws.send(
     JSON.stringify({
       type: "initialState",
@@ -62,6 +63,7 @@ wss.on("connection", (ws: WebSocket) => {
     })
   );
 
+  // Notify others of new player
   for (let [id, socket] of sockets) {
     if (id !== thisPlayerSessionId) {
       socket.send(
@@ -76,6 +78,7 @@ wss.on("connection", (ws: WebSocket) => {
   ws.on("message", (message: string) => {
     const data = JSON.parse(message);
 
+    // Position update
     if (data.type === "updatePosition") {
       player.position.x = data.position.x;
       player.position.y = data.position.y;
@@ -93,6 +96,7 @@ wss.on("connection", (ws: WebSocket) => {
       }
     }
 
+    // Aim update
     if (data.type === "aim") {
       for (let [id, socket] of sockets) {
         if (id !== thisPlayerSessionId) {
@@ -107,9 +111,10 @@ wss.on("connection", (ws: WebSocket) => {
       }
     }
 
+    // Shooting
     if (data.type === "shoot") {
       const bullet = new Bullet();
-      console.log("Bullet spawn");
+      console.log("Bullet spawn from weapon:", data.weaponName || "Unknown");
       
       bullet.name = "Bullet";
       bullet.position.x = data.position.x;
@@ -132,6 +137,76 @@ wss.on("connection", (ws: WebSocket) => {
         );
       });
     }
+
+    // Inventory switch
+    if (data.type === "inventorySwitch") {
+      player.currentWeapon = data.weaponName || "";
+      player.currentSlotIndex = data.slotIndex || 0;
+
+      // Broadcast to all other players
+      for (let [id, socket] of sockets) {
+        if (id !== thisPlayerSessionId) {
+          socket.send(
+            JSON.stringify({
+              type: "inventorySwitch",
+              sessionId: thisPlayerSessionId,
+              slotIndex: data.slotIndex,
+              weaponName: data.weaponName,
+            })
+          );
+        }
+      }
+    }
+
+    // Melee attack
+    if (data.type === "meleeAttack") {
+      const targetId = data.targetId;
+      const damage = data.damage || 15;
+
+      const targetPlayer = players.get(targetId);
+      if (targetPlayer) {
+        targetPlayer.health -= damage;
+        
+        if (targetPlayer.health <= 0) {
+          targetPlayer.health = 0;
+          targetPlayer.isAlive = false;
+
+          // Notify all players of death
+          sockets.forEach((socket) => {
+            socket.send(
+              JSON.stringify({
+                type: "playerKilled",
+                sessionId: targetId,
+              })
+            );
+          });
+        } else {
+          // Send health update
+          sockets.forEach((socket) => {
+            socket.send(
+              JSON.stringify({
+                type: "healthUpdate",
+                sessionId: targetId,
+                health: targetPlayer.health,
+                maxHealth: targetPlayer.maxHealth,
+              })
+            );
+          });
+        }
+      }
+
+      // Broadcast melee attack event
+      sockets.forEach((socket) => {
+        socket.send(
+          JSON.stringify({
+            type: "meleeAttack",
+            attackerId: thisPlayerSessionId,
+            targetId: targetId,
+            damage: damage,
+          })
+        );
+      });
+    }
   });
 
   ws.on("close", () => {
@@ -149,6 +224,8 @@ wss.on("connection", (ws: WebSocket) => {
     }
   });
 });
+
+console.log("Server running on ws://localhost:3000");
 
 function interval(func, wait, times) {
   var interv = (function (w, t) {

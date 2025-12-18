@@ -8,12 +8,18 @@ export class Player {
   maxHealth: number;
   isAlive: boolean;
 
+  currentWeapon: string;
+  currentSlotIndex: number;
+
   constructor(sessionId: string) {
     this.sessionId = sessionId;
     this.username = '';
-    this.position  = new Vector2();
+    this.position = new Vector2();
     this.maxHealth = 100;
     this.health = this.maxHealth;
     this.isAlive = true;
+
+    this.currentWeapon = "";
+    this.currentSlotIndex = 0;
   }
 }
