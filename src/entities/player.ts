@@ -6,6 +6,8 @@ export class Player {
   position: Vector2;
   health: number;
   maxHealth: number;
+  shield: number;
+  maxShield: number;
   isAlive: boolean;
 
   currentWeapon: string;
@@ -17,6 +19,8 @@ export class Player {
     this.position = new Vector2();
     this.maxHealth = 100;
     this.health = this.maxHealth;
+    this.maxShield = 100;
+    this.shield = this.maxShield;
     this.isAlive = true;
 
     this.currentWeapon = "";

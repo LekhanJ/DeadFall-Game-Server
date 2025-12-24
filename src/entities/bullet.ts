@@ -4,13 +4,17 @@ import { ServerObject } from "./serverObject.ts";
 export class Bullet extends ServerObject {
     direction: Vector2;
     speed: number;
-    lifetime: number
+    lifetime: number;
+    hasCollided: boolean;
+    activator: string;
 
     constructor() {
         super();
         this.direction = new Vector2();
         this.speed = 0.5;
         this.lifetime = 2000;
+        this.hasCollided = false;
+        this.activator = '';
     }
 
     onUpdate(delta: number) {
@@ -19,6 +23,6 @@ export class Bullet extends ServerObject {
 
         this.lifetime -= delta;
 
-        return this.lifetime <= 0;
+        return this.lifetime <= 0 || this.hasCollided;
     }
 }
