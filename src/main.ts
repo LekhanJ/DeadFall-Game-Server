@@ -1,6 +1,8 @@
 import { WebSocketServer, WebSocket } from "ws";
 import { Player } from "./entities/player.ts";
 import { Bullet } from "./entities/bullet.ts";
+import { Grenade } from "./entities/grenade.ts";
+import { Inventory, ItemTemplates, ItemType } from "./gameplay/inventory.ts";
 
 // ============================================================================
 // Types & Constants
@@ -14,7 +16,9 @@ interface GameState {
   players: Map<string, Player>;
   sockets: Map<string, WebSocket>;
   bullets: Map<string, Bullet>;
+  grenades: Map<string, Grenade>;
   playerInputs: Map<string, PlayerInput>;
+  inventories: Map<string, Inventory>;
 }
 
 interface PlayerInput {
@@ -31,7 +35,9 @@ const gameState: GameState = {
   players: new Map(),
   sockets: new Map(),
   bullets: new Map(),
+  grenades: new Map(),
   playerInputs: new Map(),
+  inventories: new Map(),
 };
 
 // ============================================================================
@@ -50,7 +56,6 @@ class MessageHandler {
   }
 
   handleMovementInput(data: any) {
-    // Store the input for processing in game loop
     this.state.playerInputs.set(this.sessionId, {
       horizontal: data.horizontal || 0,
       vertical: data.vertical || 0,
@@ -67,9 +72,15 @@ class MessageHandler {
   }
 
   handleShoot(data: any) {
+    const inventory = this.state.inventories.get(this.sessionId);
+    if (!inventory) return;
+
+    const currentItem = inventory.getCurrentItem();
+    if (!currentItem || currentItem.itemType !== ItemType.Weapon) return;
+
     const bullet = new Bullet();
     bullet.name = "Bullet";
-    bullet.activator = data.activator;
+    bullet.activator = this.sessionId;
     bullet.position.x = data.position.x;
     bullet.position.y = data.position.y;
     bullet.direction.x = data.direction.x;
@@ -87,22 +98,111 @@ class MessageHandler {
       direction: bullet.direction,
     });
 
-    console.log("Bullet spawned from weapon:", data.weaponName || "Unknown");
+    console.log("Bullet spawned from weapon:", currentItem.weaponName || "Unknown");
   }
 
   handleInventorySwitch(data: any) {
-    this.player.currentWeapon = data.weaponName || "";
-    this.player.currentSlotIndex = data.slotIndex || 0;
+    const slotIndex = data.slotIndex;
+    const inventory = this.state.inventories.get(this.sessionId);
+    
+    if (!inventory) return;
 
-    this.broadcastToOthers({
-      type: "inventorySwitch",
-      sessionId: this.sessionId,
-      slotIndex: data.slotIndex,
-      weaponName: data.weaponName,
-    });
+    const success = inventory.switchToSlot(slotIndex);
+    
+    if (success) {
+      const currentItem = inventory.getCurrentItem();
+      
+      // Update player's current weapon
+      this.player.currentSlotIndex = slotIndex;
+      this.player.currentWeapon = currentItem?.weaponName || "";
+
+      // Broadcast to all players
+      this.broadcastToAll({
+        type: "inventoryUpdate",
+        sessionId: this.sessionId,
+        slotIndex: slotIndex,
+        item: currentItem,
+      });
+
+      console.log(`Player ${this.sessionId} switched to slot ${slotIndex}: ${currentItem?.itemName}`);
+    }
+  }
+
+  handleUseItem(data: any) {
+    const inventory = this.state.inventories.get(this.sessionId);
+    if (!inventory) return;
+
+    const slotIndex = data.slotIndex || inventory.currentSlotIndex;
+    const item = inventory.useConsumable(slotIndex);
+
+    if (item) {
+      // Apply consumable effects
+      if (item.itemType === ItemType.Health) {
+        const healAmount = 50; // Configurable
+        this.player.health = Math.min(this.player.health + healAmount, this.player.maxHealth);
+        
+        this.broadcastHealthUpdate(this.sessionId, this.player);
+      } else if (item.itemType === ItemType.Shield) {
+        const shieldAmount = 50; // Configurable
+        this.player.shield = Math.min(this.player.shield + shieldAmount, this.player.maxShield);
+        
+        this.broadcastHealthUpdate(this.sessionId, this.player);
+      }
+
+      // Send updated inventory to player
+      this.sendInventoryUpdate();
+    }
+  }
+
+  handleThrowGrenade(data: any) {
+    const inventory = this.state.inventories.get(this.sessionId);
+    if (!inventory) return;
+
+    const currentItem = inventory.getCurrentItem();
+    
+    if (currentItem && currentItem.itemType === ItemType.Grenade && currentItem.amount && currentItem.amount > 0) {
+      // Decrease grenade count
+      if (currentItem.amount > 1) {
+        currentItem.amount--;
+      } else {
+        inventory.removeItem(inventory.currentSlotIndex);
+      }
+
+      // Create grenade projectile
+      const grenade = new Grenade();
+      grenade.activator = this.sessionId;
+      grenade.position.x = data.position.x;
+      grenade.position.y = data.position.y;
+      grenade.direction.x = data.direction.x;
+      grenade.direction.y = data.direction.y;
+
+      this.state.grenades.set(grenade.id, grenade);
+
+      // Broadcast grenade spawn to all clients
+      this.broadcastToAll({
+        type: "serverSpawn",
+        name: "Grenade",
+        sessionId: this.sessionId,
+        id: grenade.id,
+        activator: grenade.activator,
+        position: grenade.position,
+        direction: grenade.direction,
+      });
+
+      // Send updated inventory
+      this.sendInventoryUpdate();
+
+      console.log(`Player ${this.sessionId} threw a grenade`);
+    }
   }
 
   handleMeleeAttack(data: any) {
+    const inventory = this.state.inventories.get(this.sessionId);
+    if (!inventory) return;
+
+    const currentItem = inventory.getCurrentItem();
+    if (!currentItem || currentItem.itemType !== ItemType.Hand) return;
+
     const targetId = data.targetId;
     const damage = data.damage || 15;
     const targetPlayer = this.state.players.get(targetId);
@@ -125,10 +225,27 @@ class MessageHandler {
     });
   }
 
+  handleRequestInventory(data: any) {
+    this.sendInventoryUpdate();
+  }
+
   handleBulletCollision(data: any) {
     const bullet = this.state.bullets.get(data.id);
     if (bullet) {
       bullet.hasCollided = true;
+    }
+  }
+
+  private sendInventoryUpdate() {
+    const inventory = this.state.inventories.get(this.sessionId);
+    if (!inventory) return;
+
+    const socket = this.state.sockets.get(this.sessionId);
+    if (socket) {
+      socket.send(JSON.stringify({
+        type: "fullInventoryUpdate",
+        inventory: inventory.serialize(),
+      }));
     }
   }
 
@@ -174,14 +291,13 @@ class MessageHandler {
 
 function startGameLoop() {
   setInterval(() => {
-    const deltaTime = TICK_RATE / 1000; // Convert to seconds
+    const deltaTime = TICK_RATE / 1000;
 
-    // Update player positions based on inputs
+    // Update player positions
     gameState.playerInputs.forEach((input, sessionId) => {
       const player = gameState.players.get(sessionId);
       if (!player || !player.isAlive) return;
 
-      // Normalize input vector
       const inputMagnitude = Math.sqrt(
         input.horizontal * input.horizontal + input.vertical * input.vertical
       );
@@ -194,11 +310,9 @@ function startGameLoop() {
         moveY /= inputMagnitude;
       }
 
-      // Update position
       player.position.x += moveX * MOVE_SPEED * deltaTime;
       player.position.y += moveY * MOVE_SPEED * deltaTime;
 
-      // Broadcast position to all clients
       broadcastToAll({
         type: "serverPositionUpdate",
         sessionId: sessionId,
@@ -213,10 +327,8 @@ function startGameLoop() {
     const bulletsToRemove: string[] = [];
 
     gameState.bullets.forEach((bullet, bulletId) => {
-      // 1. Move bullet
       const expired = bullet.onUpdate(TICK_RATE);
 
-      // 2. Check collision
       const hitPlayer = checkBulletHits(bullet, gameState);
 
       if (hitPlayer) {
@@ -248,7 +360,6 @@ function startGameLoop() {
         return;
       }
 
-      // 3. Send movement update (can be optimized later)
       broadcastToAll({
         type: "bulletMove",
         id: bulletId,
@@ -259,9 +370,84 @@ function startGameLoop() {
       });
     });
 
-    // 4. Remove bullets AFTER iteration
-    for (const id of bulletsToRemove) {
-      gameState.bullets.delete(id);
+    // Update grenades
+    const grenadesToRemove: string[] = [];
+
+    gameState.grenades.forEach((grenade, grenadeId) => {
+      const expired = grenade.onUpdate(TICK_RATE);
+
+      // Check if grenade should explode
+      if (expired && !grenade.hasExploded) {
+        grenade.explode();
+        
+        // Apply damage to all players in explosion radius
+        gameState.players.forEach((player, playerId) => {
+          if (!player.isAlive) return;
+          if (player.sessionId === grenade.activator) return; // Don't damage thrower (optional)
+
+          const distance = grenade.position.distance(player.position);
+
+          if (distance <= grenade.explosionRadius) {
+            // Calculate damage based on distance (closer = more damage)
+            const damageMultiplier = 1 - (distance / grenade.explosionRadius);
+            const actualDamage = Math.floor(grenade.damage * damageMultiplier);
+
+            if (actualDamage > 0) {
+              const died = applyDamage(player, actualDamage);
+
+              broadcastToAll({
+                type: "healthUpdate",
+                sessionId: player.sessionId,
+                health: player.health,
+                shield: player.shield,
+                maxHealth: player.maxHealth,
+                maxShield: player.maxShield,
+              });
+
+              if (died) {
+                broadcastToAll({
+                  type: "playerKilled",
+                  sessionId: player.sessionId,
+                });
+              }
+            }
+          }
+        });
+
+        // Broadcast explosion effect
+        broadcastToAll({
+          type: "grenadeExplode",
+          id: grenadeId,
+          position: {
+            x: grenade.position.x,
+            y: grenade.position.y,
+          },
+          radius: grenade.explosionRadius,
+        });
+
+        grenadesToRemove.push(grenadeId);
+        return;
+      }
+
+      if (expired) {
+        grenadesToRemove.push(grenadeId);
+        return;
+      }
+
+      // Send movement update
+      broadcastToAll({
+        type: "grenadeMove",
+        id: grenadeId,
+        position: {
+          x: grenade.position.x,
+          y: grenade.position.y,
+        },
+      });
+    });
+
+    // Remove exploded grenades
+    for (const id of grenadesToRemove) {
+      gameState.grenades.delete(id);
       broadcastToAll({
         type: "serverUnspawn",
         id,
@@ -277,10 +463,8 @@ function checkBulletHits(bullet: Bullet, state: GameState) {
 
     const dx = player.position.x - bullet.position.x;
     const dy = player.position.y - bullet.position.y;
-
     const distance = Math.sqrt(dx * dx + dy * dy);
-
-    const HIT_RADIUS = 0.5; // tweak as needed
+    const HIT_RADIUS = 0.5;
 
     if (distance <= HIT_RADIUS) {
       return player;
@@ -322,9 +506,18 @@ function handleNewConnection(ws: WebSocket) {
 
   const sessionId = crypto.randomUUID();
   const player = new Player(sessionId);
+  const inventory = new Inventory();
+
+  // Give player starting items
+  inventory.addItem(1, ItemTemplates.Pistol());
+  inventory.addItem(2, ItemTemplates.Rifle());
+  inventory.addItem(3, ItemTemplates.HealthPack(2));
+  inventory.addItem(4, ItemTemplates.ShieldPack(2));
+  inventory.addItem(5, ItemTemplates.Grenade(3));
 
   gameState.players.set(sessionId, player);
   gameState.sockets.set(sessionId, ws);
+  gameState.inventories.set(sessionId, inventory);
   gameState.playerInputs.set(sessionId, {
     horizontal: 0,
     vertical: 0,
@@ -333,7 +526,7 @@ function handleNewConnection(ws: WebSocket) {
 
   console.log("Player joined with id:", sessionId);
 
-  sendInitialState(ws, sessionId, player);
+  sendInitialState(ws, sessionId, player, inventory);
   notifyPlayersOfNewJoin(sessionId, player);
 
   const messageHandler = new MessageHandler(sessionId, player, gameState);
@@ -347,26 +540,33 @@ function handleNewConnection(ws: WebSocket) {
   });
 }
 
-function sendInitialState(ws: WebSocket, sessionId: string, player: Player) {
+function sendInitialState(ws: WebSocket, sessionId: string, player: Player, inventory: Inventory) {
   ws.send(
     JSON.stringify({
       type: "initialState",
       sessionId: sessionId,
       self: player,
+      inventory: inventory.serialize(),
       others: Array.from(gameState.players.values()).filter(
         (p) => p.sessionId !== sessionId
-      ),
+      ).map(p => ({
+        ...p,
+        inventory: gameState.inventories.get(p.sessionId)?.serialize()
+      })),
     })
   );
 }
 
 function notifyPlayersOfNewJoin(sessionId: string, player: Player) {
+  const inventory = gameState.inventories.get(sessionId);
+  
   gameState.sockets.forEach((socket, id) => {
     if (id !== sessionId) {
       socket.send(
         JSON.stringify({
           type: "spawn",
           player: player,
+          inventory: inventory?.serialize(),
         })
       );
     }
@@ -390,11 +590,20 @@ function handleMessage(message: string, handler: MessageHandler) {
       case "inventorySwitch":
         handler.handleInventorySwitch(data);
         break;
+      case "useItem":
+        handler.handleUseItem(data);
+        break;
+      case "throwGrenade":
+        handler.handleThrowGrenade(data);
+        break;
       case "meleeAttack":
         handler.handleMeleeAttack(data);
         break;
       case "bulletCollide":
         handler.handleBulletCollision(data);
+        break;
+      case "requestInventory":
+        handler.handleRequestInventory(data);
         break;
       default:
         console.warn("Unknown message type:", data.type);
@@ -410,6 +619,7 @@ function handleDisconnection(sessionId: string) {
   gameState.players.delete(sessionId);
   gameState.sockets.delete(sessionId);
   gameState.playerInputs.delete(sessionId);
+  gameState.inventories.delete(sessionId);
 
   broadcastToAll({
     type: "player_left",
