@@ -98,20 +98,23 @@ class MessageHandler {
       direction: bullet.direction,
     });
 
-    console.log("Bullet spawned from weapon:", currentItem.weaponName || "Unknown");
+    console.log(
+      "Bullet spawned from weapon:",
+      currentItem.weaponName || "Unknown"
+    );
   }
 
   handleInventorySwitch(data: any) {
     const slotIndex = data.slotIndex;
     const inventory = this.state.inventories.get(this.sessionId);
-    
+
     if (!inventory) return;
 
     const success = inventory.switchToSlot(slotIndex);
-    
+
     if (success) {
       const currentItem = inventory.getCurrentItem();
-      
+
       // Update player's current weapon
       this.player.currentSlotIndex = slotIndex;
       this.player.currentWeapon = currentItem?.weaponName || "";
@@ -124,7 +127,9 @@ class MessageHandler {
         item: currentItem,
       });
 
-      console.log(`Player ${this.sessionId} switched to slot ${slotIndex}: ${currentItem?.itemName}`);
+      console.log(
+        `Player ${this.sessionId} switched to slot ${slotIndex}: ${currentItem?.itemName}`
+      );
     }
   }
 
@@ -133,25 +138,44 @@ class MessageHandler {
     if (!inventory) return;
 
     const slotIndex = data.slotIndex || inventory.currentSlotIndex;
-    const item = inventory.useConsumable(slotIndex);
+    const item = inventory.getItemAt(slotIndex);
+    if (!item) return;
 
-    if (item) {
-      // Apply consumable effects
-      if (item.itemType === ItemType.Health) {
-        const healAmount = 50; // Configurable
-        this.player.health = Math.min(this.player.health + healAmount, this.player.maxHealth);
-        
-        this.broadcastHealthUpdate(this.sessionId, this.player);
-      } else if (item.itemType === ItemType.Shield) {
-        const shieldAmount = 50; // Configurable
-        this.player.shield = Math.min(this.player.shield + shieldAmount, this.player.maxShield);
-        
-        this.broadcastHealthUpdate(this.sessionId, this.player);
-      }
-
-      // Send updated inventory to player
-      this.sendInventoryUpdate();
+    if (
+      item.itemType === ItemType.Health &&
+      this.player.health >= this.player.maxHealth
+    ) {
+      return;
     }
+
+    if (
+      item.itemType === ItemType.Shield &&
+      this.player.shield >= this.player.maxShield
+    ) {
+      return;
+    }
+
+    const consumed = inventory.useConsumable(slotIndex);
+    if (!consumed) return;
+
+    if (item.itemType === ItemType.Health) {
+      const healAmount = 50;
+      this.player.health = Math.min(
+        this.player.health + healAmount,
+        this.player.maxHealth
+      );
+    }
+
+    if (item.itemType === ItemType.Shield) {
+      const shieldAmount = 50;
+      this.player.shield = Math.min(
+        this.player.shield + shieldAmount,
+        this.player.maxShield
+      );
+    }
+
+    this.broadcastHealthUpdate(this.sessionId, this.player);
+    this.sendInventoryUpdate();
   }
 
   handleThrowGrenade(data: any) {
@@ -159,8 +183,13 @@ class MessageHandler {
     if (!inventory) return;
 
     const currentItem = inventory.getCurrentItem();
-    
-    if (currentItem && currentItem.itemType === ItemType.Grenade && currentItem.amount && currentItem.amount > 0) {
+
+    if (
+      currentItem &&
+      currentItem.itemType === ItemType.Grenade &&
+      currentItem.amount &&
+      currentItem.amount > 0
+    ) {
       // Decrease grenade count
       if (currentItem.amount > 1) {
         currentItem.amount--;
@@ -171,8 +200,8 @@ class MessageHandler {
       // Create grenade projectile
       const grenade = new Grenade();
       grenade.activator = this.sessionId;
-      grenade.position.x = data.position.x;
-      grenade.position.y = data.position.y;
+      grenade.position.x = data.position.x + data.direction.x * 1;
+      grenade.position.y = data.position.y + data.direction.y * 1;
       grenade.direction.x = data.direction.x;
       grenade.direction.y = data.direction.y;
 
@@ -242,10 +271,12 @@ class MessageHandler {
 
     const socket = this.state.sockets.get(this.sessionId);
     if (socket) {
-      socket.send(JSON.stringify({
-        type: "fullInventoryUpdate",
-        inventory: inventory.serialize(),
-      }));
+      socket.send(
+        JSON.stringify({
+          type: "fullInventoryUpdate",
+          inventory: inventory.serialize(),
+        })
+      );
     }
   }
 
@@ -379,17 +410,16 @@ function startGameLoop() {
       // Check if grenade should explode
       if (expired && !grenade.hasExploded) {
         grenade.explode();
-        
+
         // Apply damage to all players in explosion radius
         gameState.players.forEach((player, playerId) => {
           if (!player.isAlive) return;
-          if (player.sessionId === grenade.activator) return; // Don't damage thrower (optional)
 
           const distance = grenade.position.distance(player.position);
 
           if (distance <= grenade.explosionRadius) {
             // Calculate damage based on distance (closer = more damage)
-            const damageMultiplier = 1 - (distance / grenade.explosionRadius);
+            const damageMultiplier = 1 - distance / grenade.explosionRadius;
             const actualDamage = Math.floor(grenade.damage * damageMultiplier);
 
             if (actualDamage > 0) {
@@ -511,8 +541,8 @@ function handleNewConnection(ws: WebSocket) {
   // Give player starting items
   inventory.addItem(1, ItemTemplates.Pistol());
   inventory.addItem(2, ItemTemplates.Rifle());
-  inventory.addItem(3, ItemTemplates.HealthPack(2));
-  inventory.addItem(4, ItemTemplates.ShieldPack(2));
+  inventory.addItem(3, ItemTemplates.HealthPack(4));
+  inventory.addItem(4, ItemTemplates.ShieldPack(4));
   inventory.addItem(5, ItemTemplates.Grenade(3));
 
   gameState.players.set(sessionId, player);
@@ -540,26 +570,31 @@ function handleNewConnection(ws: WebSocket) {
   });
 }
 
-function sendInitialState(ws: WebSocket, sessionId: string, player: Player, inventory: Inventory) {
+function sendInitialState(
+  ws: WebSocket,
+  sessionId: string,
+  player: Player,
+  inventory: Inventory
+) {
   ws.send(
     JSON.stringify({
       type: "initialState",
       sessionId: sessionId,
       self: player,
       inventory: inventory.serialize(),
-      others: Array.from(gameState.players.values()).filter(
-        (p) => p.sessionId !== sessionId
-      ).map(p => ({
-        ...p,
-        inventory: gameState.inventories.get(p.sessionId)?.serialize()
-      })),
+      others: Array.from(gameState.players.values())
+        .filter((p) => p.sessionId !== sessionId)
+        .map((p) => ({
+          ...p,
+          inventory: gameState.inventories.get(p.sessionId)?.serialize(),
+        })),
     })
   );
 }
 
 function notifyPlayersOfNewJoin(sessionId: string, player: Player) {
   const inventory = gameState.inventories.get(sessionId);
-  
+
   gameState.sockets.forEach((socket, id) => {
     if (id !== sessionId) {
       socket.send(
