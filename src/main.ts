@@ -401,6 +401,15 @@ function startGameLoop() {
       });
     });
 
+    // Remove bullets
+    for (const id of bulletsToRemove) {
+      gameState.bullets.delete(id);
+      broadcastToAll({
+        type: "serverUnspawn",
+        id,
+      });
+    }
+
     // Update grenades
     const grenadesToRemove: string[] = [];
 
