@@ -54,12 +54,12 @@ export class Inventory {
   }
 
   getCurrentItem(): InventoryItem | null {
-    return this.slots[this.currentSlotIndex];
+    return this.slots[this.currentSlotIndex] || null;
   }
 
   getItemAt(slotIndex: number): InventoryItem | null {
     if (slotIndex < 0 || slotIndex >= this.maxSlots) return null;
-    return this.slots[slotIndex];
+    return this.slots[slotIndex] || null;
   }
 
   useConsumable(slotIndex: number): InventoryItem | null {

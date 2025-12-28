@@ -24,7 +24,7 @@ export class Grenade extends ServerObject {
     this.lifetime = 3000;           
     this.hasExploded = false;
     this.activator = '';
-    this.explosionRadius = 5.0;
+    this.explosionRadius = 2.0;
     this.damage = 75;
   }
 
